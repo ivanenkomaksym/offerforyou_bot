@@ -16,10 +16,7 @@ import (
 )
 
 var (
-
-	// Store bot screaming status
-	screaming = false
-	bot       *tgbotapi.BotAPI
+	bot *tgbotapi.BotAPI
 
 	// Повідомлення-привітання, яке бачить користувач на старті
 	welcomeMessage = "<b>Привіт!</b> 👋\n\n" +
@@ -210,6 +207,11 @@ func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
 
 func handleUpdate(update tgbotapi.Update) {
 	if update.CallbackQuery != nil {
+		user := update.CallbackQuery.From
+		text := update.CallbackQuery.Data
+
+		log.Printf("'[%s] %s %s' selected '%s'", user.UserName, user.FirstName, user.LastName, text)
+
 		// Створюємо повідомлення для редагування
 		// bot.AnswerCallbackQuery(tgbotapi.NewCallback(update.CallbackQuery.ID, ""))
 		msg := tgbotapi.NewEditMessageText(
@@ -246,6 +248,9 @@ func handleUpdate(update tgbotapi.Update) {
 
 	// Якщо це команда /start
 	if update.Message != nil && update.Message.IsCommand() {
+		user := update.Message.From
+		log.Printf("'[%s] %s %s' started chat", user.UserName, user.FirstName, user.LastName)
+
 		if update.Message.Command() == "start" {
 			msg := tgbotapi.NewMessage(update.Message.Chat.ID, welcomeMessage)
 			msg.ParseMode = "HTML"
@@ -253,51 +258,4 @@ func handleUpdate(update tgbotapi.Update) {
 			bot.Send(msg)
 		}
 	}
-}
-
-func handleMessage(message *tgbotapi.Message) {
-	user := message.From
-	text := message.Text
-
-	if user == nil {
-		return
-	}
-
-	// Print to console
-	log.Printf("%s wrote %s", user.FirstName, text)
-
-	var err error
-	if strings.HasPrefix(text, "/") {
-		err = handleCommand(message.Chat.ID, text)
-	} else if screaming && len(text) > 0 {
-		msg := tgbotapi.NewMessage(message.Chat.ID, strings.ToUpper(text))
-		// To preserve markdown, we attach entities (bold, italic..)
-		msg.Entities = message.Entities
-		_, err = bot.Send(msg)
-	} else {
-		// This is equivalent to forwarding, without the sender's name
-		copyMsg := tgbotapi.NewCopyMessage(message.Chat.ID, message.Chat.ID, message.MessageID)
-		_, err = bot.CopyMessage(copyMsg)
-	}
-
-	if err != nil {
-		log.Printf("An error occured: %s", err.Error())
-	}
-}
-
-// When we get a command, we react accordingly
-func handleCommand(chatId int64, command string) error {
-	var err error
-
-	switch command {
-	case "/scream":
-		screaming = true
-		break
-
-	case "/whisper":
-		screaming = false
-		break
-	}
-
-	return err
 }

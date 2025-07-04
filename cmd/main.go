@@ -1,11 +1,14 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"log"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
+
 	"github.com/joho/godotenv"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -58,29 +61,29 @@ var (
 		"Вам потрібна не просто порада, а <b>комплексний супровід</b>. Потрібен професіонал, який зануриться у вашу ситуацію, знайде корінь проблеми, розробить стратегію і буде поруч на кожному кроці до отримання оферу."
 
 	// --- Тексти кнопок та дані для Callback ---
-	
+
 	// Головне меню
-	btnTextRejection      = "Відгук ➞ Відмова"
-	btnDataRejection      = "rejection_fail" // callback_data
-	
-	btnTextRecruiterFail  = "Провалюю співбесіду з рекрутером"
-	btnDataRecruiterFail  = "recruiter_fail" // callback_data
-	
-	btnTextTechFail       = "Провалюю технічну співбесіду"
-	btnDataTechFail       = "tech_fail"      // callback_data
-	
-	btnTextNoResult       = "Роблю все, а результату немає"
-	btnDataNoResult       = "no_result"      // callback_data
-	
+	btnTextRejection = "Відгук ➞ Відмова"
+	btnDataRejection = "rejection_fail" // callback_data
+
+	btnTextRecruiterFail = "Провалюю співбесіду з рекрутером"
+	btnDataRecruiterFail = "recruiter_fail" // callback_data
+
+	btnTextTechFail = "Провалюю технічну співбесіду"
+	btnDataTechFail = "tech_fail" // callback_data
+
+	btnTextNoResult = "Роблю все, а результату немає"
+	btnDataNoResult = "no_result" // callback_data
+
 	// Навігація та контакти
-	btnTextBack           = "⬅️ Назад до меню"
-	btnDataBack           = "back_to_main"   // callback_data
-	
-	btnTextContact        = "✍️ Зв'язатися з консультантом"
-	contactURL            = "https://t.me/Anastasiia_hrg" // Пряме посилання на контакт
-	
+	btnTextBack = "⬅️ Назад до меню"
+	btnDataBack = "back_to_main" // callback_data
+
+	btnTextContact = "✍️ Зв'язатися з консультантом"
+	contactURL     = "https://t.me/Anastasiia_hrg" // Пряме посилання на контакт
+
 	// --- Клавіатури (Markup) ---
-	
+
 	// Клавіатура для головного меню. 4 кнопки, розташовані у 2 ряди
 	mainMenuMarkup = tgbotapi.NewInlineKeyboardMarkup(
 		tgbotapi.NewInlineKeyboardRow(
@@ -111,20 +114,21 @@ var (
 func main() {
 	var err error
 
-	err = godotenv.Load()
-    if err != nil {
-    	log.Fatal(err)
-    }
+	godotenv.Load()
 
 	bot_token := os.Getenv("BOT_TOKEN")
+	if bot_token == "" {
+		log.Fatal("BOT_TOKEN environment variable not set.")
+	}
+
 	bot, err = tgbotapi.NewBotAPI(bot_token)
 	if err != nil {
-		// Abort if something is wrong
 		log.Panic(err)
 	}
 
 	// Set this to true to log all interactions with telegram servers
-	bot.Debug = false
+	debugEnv := os.Getenv("DEBUG")
+	bot.Debug = strings.ToLower(debugEnv) == "true"
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -132,6 +136,17 @@ func main() {
 	// Create a new cancellable background context. Calling `cancel()` leads to the cancellation of the context
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Set up OS signal handling for graceful shutdown
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		sig := <-signalChan // Block until a signal is received
+		log.Printf("Received signal: %v. Initiating graceful shutdown...", sig)
+		cancel() // Call cancel to signal all goroutines to stop
+	}()
 
 	// `updates` is a golang channel which receives telegram updates
 	updates := bot.GetUpdatesChan(u)
@@ -140,12 +155,16 @@ func main() {
 	go receiveUpdates(ctx, updates)
 
 	// Tell the user the bot is online
-	log.Println("Start listening for updates. Press enter to stop")
+	log.Println("Telegram bot started. Listening for updates...")
 
-	// Wait for a newline symbol, then cancel handling updates
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
-	cancel()
+	// 5. Block the main goroutine until context is cancelled
+	// This keeps the application running until a shutdown signal is received
+	<-ctx.Done()
 
+	log.Println("Telegram bot shutting down gracefully.")
+	// Optional: give a small grace period for ongoing operations
+	time.Sleep(2 * time.Second)
+	log.Println("Application exited.")
 }
 
 func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
@@ -171,10 +190,10 @@ func handleUpdate(update tgbotapi.Update) {
 			update.CallbackQuery.Message.MessageID,
 			"", // Текст буде встановлено нижче
 		)
-		
+
 		// Визначаємо, яка клавіатура буде у відповіді
 		var markup tgbotapi.InlineKeyboardMarkup
-		
+
 		switch update.CallbackQuery.Data {
 		case btnDataRejection:
 			msg.Text = responseRejection
@@ -192,7 +211,7 @@ func handleUpdate(update tgbotapi.Update) {
 			msg.Text = welcomeMessage
 			markup = mainMenuMarkup
 		}
-		
+
 		msg.ReplyMarkup = &markup
 		msg.ParseMode = "HTML" // Важливо, щоб теги <b> працювали
 		bot.Send(msg)

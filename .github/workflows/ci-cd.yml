@@ -28,7 +28,6 @@ jobs:
         check-latest: true
 
     - name: Build Go app
-      working-directory: ./cmd
       run: go build -v ./...
 
     - name: Run Go tests
@@ -39,7 +38,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      
+
       # Authenticate with Google Cloud
       - name: Authenticate with Google Cloud
         uses: google-github-actions/auth@v2

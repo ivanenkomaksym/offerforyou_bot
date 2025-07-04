@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -153,6 +154,32 @@ func main() {
 
 	// Pass cancellable context to goroutine
 	go receiveUpdates(ctx, updates)
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080" // Default Cloud Run port
+	}
+	addr := ":" + port
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Just respond OK to any request. This is for Cloud Run's health checks.
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
+
+	srv := &http.Server{Addr: addr, Handler: mux}
+
+	// Start the HTTP server in a goroutine
+	// It must run in a goroutine so it doesn't block the main goroutine
+	// which is needed to block for the ctx.Done() signal.
+	go func() {
+		log.Printf("Starting health check HTTP server on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Health check HTTP server failed: %v", err)
+		}
+		log.Println("Health check HTTP server stopped.")
+	}()
 
 	// Tell the user the bot is online
 	log.Println("Telegram bot started. Listening for updates...")

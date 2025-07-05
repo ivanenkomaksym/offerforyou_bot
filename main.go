@@ -1,14 +1,11 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
 	"strings"
-	"syscall"
-	"time"
 
 	"github.com/joho/godotenv"
 
@@ -114,94 +111,95 @@ func main() {
 
 	godotenv.Load()
 
-	bot_token := os.Getenv("BOT_TOKEN")
-	if bot_token == "" {
+	botToken := os.Getenv("BOT_TOKEN")
+	if botToken == "" {
 		log.Fatal("BOT_TOKEN environment variable not set.")
 	}
 
-	bot, err = tgbotapi.NewBotAPI(bot_token)
+	bot, err = tgbotapi.NewBotAPI(botToken)
 	if err != nil {
 		log.Panic(err)
 	}
 
-	// Set this to true to log all interactions with telegram servers
+	// Set debug mode if DEBUG environment variable is "true"
 	debugEnv := os.Getenv("DEBUG")
 	bot.Debug = strings.ToLower(debugEnv) == "true"
 
-	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	log.Printf("Authorized on account %s", bot.Self.UserName)
 
-	// Create a new cancellable background context. Calling `cancel()` leads to the cancellation of the context
-	ctx := context.Background()
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// Get the WEBHOOK_URL from environment variables
+	// This will be the URL of your deployed Cloud Run service + the webhook path
+	webhookURL := os.Getenv("WEBHOOK_URL")
+	if webhookURL == "" {
+		log.Fatal("WEBHOOK_URL environment variable not set. This should be your Cloud Run service URL including the path (e.g., https://<service-url>/telegram-webhook).")
+	}
 
-	// Set up OS signal handling for graceful shutdown
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
+	wh, err := tgbotapi.NewWebhook(webhookURL)
+	if err != nil {
+		log.Fatalf("Failed to create webhook config: %v", err)
+	}
+	// Use bot.Request to send the WebhookConfig to Telegram
+	_, err = bot.Request(wh)
+	if err != nil {
+		log.Fatalf("Failed to set webhook: %v", err)
+	}
 
-	go func() {
-		sig := <-signalChan // Block until a signal is received
-		log.Printf("Received signal: %v. Initiating graceful shutdown...", sig)
-		cancel() // Call cancel to signal all goroutines to stop
-	}()
+	// Get webhook info to confirm it's set and check for any errors from Telegram's side
+	info, err := bot.GetWebhookInfo()
+	if err != nil {
+		log.Fatalf("Failed to get webhook info: %v", err)
+	}
+	if info.LastErrorDate != 0 {
+		log.Printf("Telegram last webhook error: %s", info.LastErrorMessage)
+	}
+	log.Printf("Webhook set to: %s (pending: %t)", info.URL, info.PendingUpdateCount > 0)
 
-	// `updates` is a golang channel which receives telegram updates
-	updates := bot.GetUpdatesChan(u)
-
-	// Pass cancellable context to goroutine
-	go receiveUpdates(ctx, updates)
-
+	// Get the port from environment variables, default to 8080 for Cloud Run
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // Default Cloud Run port
+		port = "8080"
 	}
 	addr := ":" + port
 
+	// Create a new HTTP multiplexer
 	mux := http.NewServeMux()
+
+	// Define the webhook endpoint that Telegram will send updates to
+	// It's good practice to use a non-root path for webhooks.
+	mux.HandleFunc("/telegram-webhook", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Only POST requests are allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var update tgbotapi.Update
+		// Decode the JSON request body into a tgbotapi.Update struct
+		if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+			log.Printf("ERROR: Could not decode update: %v", err)
+			http.Error(w, "Bad Request", http.StatusBadRequest)
+			return
+		}
+
+		// Process the update in a non-blocking way if possible,
+		// but for simple bots, direct handling is fine.
+		handleUpdate(update)
+
+		// Respond with 200 OK to Telegram immediately
+		// This acknowledges receipt of the update and prevents Telegram from retrying.
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Add a health check endpoint for Cloud Run
+	// Cloud Run sends requests to the root path by default for health checks.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Just respond OK to any request. This is for Cloud Run's health checks.
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 
-	srv := &http.Server{Addr: addr, Handler: mux}
-
-	// Start the HTTP server in a goroutine
-	// It must run in a goroutine so it doesn't block the main goroutine
-	// which is needed to block for the ctx.Done() signal.
-	go func() {
-		log.Printf("Starting health check HTTP server on %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Health check HTTP server failed: %v", err)
-		}
-		log.Println("Health check HTTP server stopped.")
-	}()
-
-	// Tell the user the bot is online
-	log.Println("Telegram bot started. Listening for updates...")
-
-	// 5. Block the main goroutine until context is cancelled
-	// This keeps the application running until a shutdown signal is received
-	<-ctx.Done()
-
-	log.Println("Telegram bot shutting down gracefully.")
-	// Optional: give a small grace period for ongoing operations
-	time.Sleep(2 * time.Second)
-	log.Println("Application exited.")
-}
-
-func receiveUpdates(ctx context.Context, updates tgbotapi.UpdatesChannel) {
-	// `for {` means the loop is infinite until we manually stop it
-	for {
-		select {
-		// stop looping if ctx is cancelled
-		case <-ctx.Done():
-			return
-		// receive update from channel and then handle it
-		case update := <-updates:
-			handleUpdate(update)
-		}
+	log.Printf("Starting HTTP server on %s", addr)
+	// Start the HTTP server. This will block indefinitely, serving requests.
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		log.Fatalf("HTTP server failed: %v", err)
 	}
 }
 

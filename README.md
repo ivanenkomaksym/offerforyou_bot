@@ -21,3 +21,16 @@ go run main.go
 4. Use telegram bot
 
 This setup will allow Telegram to send updates to your ngrok public URL, which then tunnels them securely to your Go bot running on `localhost:8080`.
+
+If you want to have a custom domain that persists between launches, you can user ngrok-provided static domain
+
+1. Run
+```sh
+ngrok http 8080 --host-header=localhost --domain=mybotdev.ngrok-free.app
+```
+*Replace `mybotdev.ngrok-free.app` with your actual reserved static domain.*
+
+2. Update `WEBHOOK_URL` in `.env`:
+```sh
+WEBHOOK_URL=https://mybotdev.ngrok-free.app/telegram-webhook
+```

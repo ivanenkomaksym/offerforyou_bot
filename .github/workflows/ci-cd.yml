@@ -10,6 +10,7 @@ on:
 env:
   PROJECT_ID: ${{ secrets.PROJECT_ID }}
   BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+  WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
   GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY}}
   SERVICE_NAME: offerforyou
   REGION: europe-central2
@@ -59,4 +60,4 @@ jobs:
             --platform managed \
             --region ${{ env.REGION }} \
             --allow-unauthenticated \
-            --set-env-vars "BOT_TOKEN=${{ env.BOT_TOKEN }}"
+            --set-env-vars "BOT_TOKEN=${{ env.BOT_TOKEN }},WEBHOOK_URL=${{ env.WEBHOOK_URL }}"
